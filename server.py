@@ -6,6 +6,16 @@ import httpx
 import time
 import json
 import atexit
+from datetime import datetime, timedelta
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    # Fallback for Python < 3.9
+    try:
+        from backports.zoneinfo import ZoneInfo
+    except ImportError:
+        # Final fallback - use UTC
+        ZoneInfo = None
 
 from dotenv import load_dotenv
 from system_prompt import SYSTEM_PROMPT
@@ -187,6 +197,69 @@ def fix_credentials():
     return json.dumps(creds_dict)
 
 
+def get_current_datetime_info():
+    """
+    Get current date and time information in Asia/Kolkata timezone.
+    Returns formatted strings for use in system prompt.
+    """
+    try:
+        # Get current time in Asia/Kolkata timezone
+        if ZoneInfo is not None:
+            tz = ZoneInfo("Asia/Kolkata")
+            now = datetime.now(tz)
+            timezone_name = "Asia/Kolkata (IST)"
+        else:
+            # Fallback to UTC + 5:30 offset manually
+            from datetime import timezone, timedelta
+            ist_offset = timedelta(hours=5, minutes=30)
+            tz = timezone(ist_offset)
+            now = datetime.now(tz)
+            timezone_name = "IST (UTC+5:30)"
+        
+        # Format date as YYYY-MM-DD
+        current_date = now.strftime("%Y-%m-%d")
+        
+        # Format time as HH:MM (24-hour format)
+        current_time = now.strftime("%H:%M")
+        
+        # Get day of week
+        day_of_week = now.strftime("%A")
+        
+        # Get readable date format
+        readable_date = now.strftime("%B %d, %Y")  # e.g., "December 31, 2025"
+        
+        # Calculate tomorrow's date
+        tomorrow = now + timedelta(days=1)
+        tomorrow_date = tomorrow.strftime("%Y-%m-%d")
+        tomorrow_readable = tomorrow.strftime("%B %d, %Y")
+        tomorrow_day = tomorrow.strftime("%A")
+        
+        return {
+            "current_date": current_date,
+            "current_time": current_time,
+            "day_of_week": day_of_week,
+            "readable_date": readable_date,
+            "tomorrow_date": tomorrow_date,
+            "tomorrow_readable": tomorrow_readable,
+            "tomorrow_day": tomorrow_day,
+            "timezone": timezone_name
+        }
+    except Exception as e:
+        logger.error(f"Error getting current datetime: {e}")
+        # Fallback to UTC if timezone fails
+        now = datetime.now()
+        return {
+            "current_date": now.strftime("%Y-%m-%d"),
+            "current_time": now.strftime("%H:%M"),
+            "day_of_week": now.strftime("%A"),
+            "readable_date": now.strftime("%B %d, %Y"),
+            "tomorrow_date": (now + timedelta(days=1)).strftime("%Y-%m-%d"),
+            "tomorrow_readable": (now + timedelta(days=1)).strftime("%B %d, %Y"),
+            "tomorrow_day": (now + timedelta(days=1)).strftime("%A"),
+            "timezone": "UTC (fallback)"
+        }
+
+
 async def fetch_detailed_information(params: FunctionCallParams):
     """Fetch detailed information from the preprocessor API for queries outside the system prompt"""
     try:
@@ -254,6 +327,95 @@ async def fetch_detailed_information(params: FunctionCallParams):
             "summary": "I apologize, but I'm having trouble accessing the detailed information right now. Let me help you with general information instead.",
             "whatsapp_sent": False,
             "email_sent": False
+        })
+
+
+async def book_appointment(params: FunctionCallParams):
+    """Book an appointment with the Disha team by making a calendar event"""
+    try:
+        title = params.arguments["title"]
+        date = params.arguments["date"]
+        start_time = params.arguments["start_time"]
+        end_time = params.arguments["end_time"]
+        description = params.arguments.get("description", "")
+        location = params.arguments.get("location", "")
+        
+        logger.info(f"Booking appointment: {title} on {date} from {start_time} to {end_time}")
+        
+        # Make POST request to calendar endpoint with exact format
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "https://preprocessor-739298578243.us-central1.run.app/calendar",
+                json={
+                    "title": title,
+                    "date": date,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "description": description,
+                    "location": location
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            # Check if there was a conflict
+            if data.get("status") == "conflict":
+                conflicts = data.get("conflicts", [])
+                conflict_message = f"I'm sorry, but there are {len(conflicts)} overlapping appointment(s) at that time. "
+                if conflicts:
+                    conflict_list = ", ".join([c.get("title", "Untitled") for c in conflicts])
+                    conflict_message += f"The conflicting events are: {conflict_list}. "
+                conflict_message += "Please choose a different time slot."
+                
+                await params.result_callback({
+                    "status": "conflict",
+                    "message": conflict_message,
+                    "conflicts": conflicts
+                })
+            elif data.get("status") == "success":
+                event = data.get("event", {})
+                success_message = f"Great! I've successfully booked your appointment '{title}' on {date} from {start_time} to {end_time}."
+                if event.get("htmlLink"):
+                    success_message += f" You'll receive a calendar invitation shortly."
+                
+                await params.result_callback({
+                    "status": "success",
+                    "message": success_message,
+                    "event_id": event.get("id"),
+                    "event_link": event.get("htmlLink")
+                })
+            else:
+                await params.result_callback({
+                    "status": "error",
+                    "message": "I apologize, but I couldn't book the appointment at this moment. Please try again."
+                })
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error booking appointment: {e.response.status_code} - {e.response.text}")
+        if e.response.status_code == 409:  # Conflict
+            try:
+                data = e.response.json()
+                conflicts = data.get("conflicts", [])
+                conflict_message = f"I'm sorry, but there are {len(conflicts)} overlapping appointment(s) at that time. Please choose a different time slot."
+                await params.result_callback({
+                    "status": "conflict",
+                    "message": conflict_message,
+                    "conflicts": conflicts
+                })
+            except:
+                await params.result_callback({
+                    "status": "conflict",
+                    "message": "I'm sorry, but there's a scheduling conflict at that time. Please choose a different time slot."
+                })
+        else:
+            await params.result_callback({
+                "status": "error",
+                "message": "I apologize, but I couldn't book the appointment at this moment. Please try again."
+            })
+    except Exception as e:
+        logger.error(f"Error booking appointment: {e}", exc_info=True)
+        await params.result_callback({
+            "status": "error",
+            "message": "I apologize, but I'm having trouble booking the appointment right now. Please try again later."
         })
 
 
@@ -356,8 +518,34 @@ async def run_bot(room_url: str, token: str):
         
         logger.info(f"Using Vertex AI model: {model_path}")
 
-        # System instruction for the bot
-        system_instruction = SYSTEM_PROMPT
+        # Get current date and time information
+        datetime_info = get_current_datetime_info()
+        logger.info(f"Current date/time context: {datetime_info['current_date']} {datetime_info['current_time']} ({datetime_info['timezone']})")
+        
+        # Inject current date/time into system prompt
+        datetime_context = f"""
+
+## CURRENT DATE AND TIME INFORMATION
+
+**IMPORTANT: Use this information when booking appointments or answering questions about dates/times.**
+
+- **Current Date**: {datetime_info['readable_date']} ({datetime_info['day_of_week']})
+- **Current Date (YYYY-MM-DD format)**: {datetime_info['current_date']}
+- **Current Time**: {datetime_info['current_time']} ({datetime_info['timezone']})
+- **Tomorrow's Date**: {datetime_info['tomorrow_readable']} ({datetime_info['tomorrow_day']})
+- **Tomorrow's Date (YYYY-MM-DD format)**: {datetime_info['tomorrow_date']}
+
+**When booking appointments:**
+- If user says "today" or "now", use: {datetime_info['current_date']}
+- If user says "tomorrow", use: {datetime_info['tomorrow_date']}
+- Always use YYYY-MM-DD format for dates in the book_appointment tool
+- Always use HH:MM format (24-hour) for times in the book_appointment tool
+- Current timezone is {datetime_info['timezone']}
+
+"""
+        
+        # Combine system prompt with datetime context
+        system_instruction = SYSTEM_PROMPT + datetime_context
 
         # Define the detailed information tool
         detailed_info_function = FunctionSchema(
@@ -376,7 +564,40 @@ async def run_bot(room_url: str, token: str):
             required=["query", "phone_number"],
         )
 
-        tools = ToolsSchema(standard_tools=[detailed_info_function])
+        # Define the appointment booking tool
+        book_appointment_function = FunctionSchema(
+            name="book_appointment",
+            description="Book an appointment with the Disha Communications team. Use this tool when the user wants to schedule a meeting, consultation, or demo. You must collect all required information (title, date, start_time, end_time, description, location) from the user before making this tool call.",
+            properties={
+                "title": {
+                    "type": "string",
+                    "description": "The title or name of the appointment/meeting (e.g., 'Consultation with Disha Team', 'Demo Session', 'Team Meeting')",
+                },
+                "date": {
+                    "type": "string",
+                    "description": "The date of the appointment in YYYY-MM-DD format (e.g., '2025-12-31')",
+                },
+                "start_time": {
+                    "type": "string",
+                    "description": "The start time of the appointment in HH:MM format (24-hour format, e.g., '14:00' for 2:00 PM)",
+                },
+                "end_time": {
+                    "type": "string",
+                    "description": "The end time of the appointment in HH:MM format (24-hour format, e.g., '15:00' for 3:00 PM)",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Optional description of the appointment or meeting purpose",
+                },
+                "location": {
+                    "type": "string",
+                    "description": "Optional location for the meeting (e.g., 'Conference Room', 'Online', 'Office')",
+                },
+            },
+            required=["title", "date", "start_time", "end_time"],
+        )
+
+        tools = ToolsSchema(standard_tools=[detailed_info_function, book_appointment_function])
 
         # Initialize Vertex AI LLM Service with tools
         llm = GeminiLiveVertexLLMService(
@@ -389,8 +610,9 @@ async def run_bot(room_url: str, token: str):
             tools=tools,
         )
 
-        # Register the function
+        # Register the functions
         llm.register_function("get_detailed_information", fetch_detailed_information)
+        llm.register_function("book_appointment", book_appointment)
 
         # Create context with initial greeting and user information collection
         context = LLMContext(
@@ -510,7 +732,7 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
     
-    port = int(os.getenv("PORT", "8001"))
+    port = int(os.getenv("PORT", "8000"))
     
     # Start ngrok tunnel before starting the server
     try:
