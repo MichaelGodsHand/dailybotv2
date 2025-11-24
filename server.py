@@ -732,7 +732,7 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
     
-    port = int(os.getenv("PORT", "8002"))
+    port = int(os.getenv("PORT", "8003"))
     
     # Start ngrok tunnel before starting the server
     try:
