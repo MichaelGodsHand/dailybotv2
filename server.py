@@ -210,7 +210,7 @@ def get_current_datetime_info():
             timezone_name = "Asia/Kolkata (IST)"
         else:
             # Fallback to UTC + 5:30 offset manually
-            from datetime import timezone, timedelta
+            from datetime import timezone
             ist_offset = timedelta(hours=5, minutes=30)
             tz = timezone(ist_offset)
             now = datetime.now(tz)
@@ -228,7 +228,7 @@ def get_current_datetime_info():
         # Get readable date format
         readable_date = now.strftime("%B %d, %Y")  # e.g., "December 31, 2025"
         
-        # Calculate tomorrow's date
+        # Calculate tomorrow's date (timedelta is already imported at top of file)
         tomorrow = now + timedelta(days=1)
         tomorrow_date = tomorrow.strftime("%Y-%m-%d")
         tomorrow_readable = tomorrow.strftime("%B %d, %Y")
@@ -732,7 +732,7 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
     
-    port = int(os.getenv("PORT", "8002"))
+    port = int(os.getenv("PORT", "8000"))
     
     # Start ngrok tunnel before starting the server
     try:
