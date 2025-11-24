@@ -333,12 +333,12 @@ async def fetch_detailed_information(params: FunctionCallParams):
 async def book_appointment(params: FunctionCallParams):
     """Book an appointment with the Disha team by making a calendar event"""
     try:
-        title = params.arguments["title"]
+        title = params.arguments.get("title", "Introductory Meeting with Disha Communications")
         date = params.arguments["date"]
         start_time = params.arguments["start_time"]
         end_time = params.arguments["end_time"]
-        description = params.arguments.get("description", "")
-        location = params.arguments.get("location", "")
+        description = params.arguments.get("description", "General introductory meeting to discuss Disha Communications' services and how we can help your business.")
+        location = params.arguments.get("location", "online")
         
         logger.info(f"Booking appointment: {title} on {date} from {start_time} to {end_time}")
         
@@ -567,34 +567,34 @@ async def run_bot(room_url: str, token: str):
         # Define the appointment booking tool
         book_appointment_function = FunctionSchema(
             name="book_appointment",
-            description="Book an appointment with the Disha Communications team. Use this tool when the user wants to schedule a meeting, consultation, or demo. You must collect all required information (title, date, start_time, end_time, description, location) from the user before making this tool call.",
+            description="Book an appointment with the Disha Communications team. Use this tool when the user wants to schedule a meeting, consultation, or demo. You must collect the date, start_time, and end_time from the user. Title and description will default to a general introductory meeting if not provided. Location defaults to 'online'. IMPORTANT: Make the tool call FIRST, then confirm the booking based on the response.",
             properties={
-                "title": {
-                    "type": "string",
-                    "description": "The title or name of the appointment/meeting (e.g., 'Consultation with Disha Team', 'Demo Session', 'Team Meeting')",
-                },
                 "date": {
                     "type": "string",
-                    "description": "The date of the appointment in YYYY-MM-DD format (e.g., '2025-12-31')",
+                    "description": "The date of the appointment in YYYY-MM-DD format (e.g., '2025-12-31'). This is REQUIRED.",
                 },
                 "start_time": {
                     "type": "string",
-                    "description": "The start time of the appointment in HH:MM format (24-hour format, e.g., '14:00' for 2:00 PM)",
+                    "description": "The start time of the appointment in HH:MM format (24-hour format, e.g., '14:00' for 2:00 PM). This is REQUIRED.",
                 },
                 "end_time": {
                     "type": "string",
-                    "description": "The end time of the appointment in HH:MM format (24-hour format, e.g., '15:00' for 3:00 PM)",
+                    "description": "The end time of the appointment in HH:MM format (24-hour format, e.g., '15:00' for 3:00 PM). This is REQUIRED.",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Optional title for the meeting. Defaults to 'Introductory Meeting with Disha Communications' if not provided. Only provide if user specifies a specific title.",
                 },
                 "description": {
                     "type": "string",
-                    "description": "Optional description of the appointment or meeting purpose",
+                    "description": "Optional description of the appointment. Defaults to a general introductory meeting description if not provided. Only provide if user specifies what to discuss.",
                 },
                 "location": {
                     "type": "string",
-                    "description": "Optional location for the meeting (e.g., 'Conference Room', 'Online', 'Office')",
+                    "description": "Location for the meeting. Defaults to 'online'. Only provide if user specifies a different location.",
                 },
             },
-            required=["title", "date", "start_time", "end_time"],
+            required=["date", "start_time", "end_time"],
         )
 
         tools = ToolsSchema(standard_tools=[detailed_info_function, book_appointment_function])
